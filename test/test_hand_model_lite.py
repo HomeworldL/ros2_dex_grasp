@@ -3,8 +3,8 @@
 
 import os
 import random
-from utils.hand_model import HandModel
-from utils.hand_model_lite import HandModelMJCFLite
+from ..utils.hand_model import HandModel
+from ..utils.hand_model_lite import HandModelMJCFLite
 import numpy as np
 import transforms3d
 import torch
