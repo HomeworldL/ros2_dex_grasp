@@ -29,11 +29,14 @@ def initialize_convex_hull(hand_model, object_model, args):
     n_objects = len(object_model.object_mesh_list)
     batch_size_each = object_model.batch_size_each
     total_batch_size = n_objects * batch_size_each
+    print(f'total_batch_size: {total_batch_size}')
 
     # initialize translation and rotation
 
     translation = torch.zeros([total_batch_size, 3], dtype=torch.float, device=device)
     rotation = torch.zeros([total_batch_size, 3, 3], dtype=torch.float, device=device)
+    # print(f'initialize translation: {translation}')
+    # print(f'initialize rotation: {rotation}')
 
     for i in range(n_objects):
         
@@ -71,6 +74,7 @@ def initialize_convex_hull(hand_model, object_model, args):
         # rotation_local: jitter the hand's orientation in a cone
         # rotation_global and translation: transform the hand to a position corresponding to point p sampled from the inflated convex hull
 
+        # TODO: 需要更换坐标系方向，freehand是x垂直于手掌
         rotation_local = torch.zeros([batch_size_each, 3, 3], dtype=torch.float, device=device)
         rotation_global = torch.zeros([batch_size_each, 3, 3], dtype=torch.float, device=device)
         for j in range(batch_size_each):
@@ -90,6 +94,13 @@ def initialize_convex_hull(hand_model, object_model, args):
     for i in range(hand_model.n_dofs):
         torch.nn.init.trunc_normal_(joint_angles[:, i], joint_angles_mu[i], joint_angles_sigma[i], hand_model.joints_lower[i] - 1e-6, hand_model.joints_upper[i] + 1e-6)
 
+    # # test ljj
+    # rotation = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0],[0.0, 0.0, 1.0]]], dtype=torch.float, device=device)
+    # print(f'initialize translation: {translation}')
+    # print(f'initialize rotation: {rotation}')
+    # print(f'initialize joint_angles: {joint_angles}')
+    # # test ljj
+    
     hand_pose = torch.cat([
         translation,
         rotation.transpose(1, 2)[:, :2].reshape(-1, 6),
@@ -98,7 +109,18 @@ def initialize_convex_hull(hand_model, object_model, args):
     hand_pose.requires_grad_()
 
     # initialize contact point indices
+    # contact_point_indices = torch.randint(hand_model.n_contact_candidates, size=[total_batch_size, args.n_contact], device=device)
 
-    contact_point_indices = torch.randint(hand_model.n_contact_candidates, size=[total_batch_size, args.n_contact], device=device)
+    contact_point_indices = []
+    contact_candidates = torch.arange(0, hand_model.n_contact_candidates, device=device)
+    for _ in range(total_batch_size):
+        # 随机打乱列表顺序并选取前x个数
+        shuffled_indices = torch.randperm(contact_candidates.size(0))
+        selected_indices = contact_candidates[shuffled_indices[:args.n_contact]]
+        contact_point_indices.append(selected_indices)
 
+    # 将结果转换成张量格式
+    contact_point_indices = torch.stack(contact_point_indices)
+    print(contact_point_indices)
+    
     hand_model.set_parameters(hand_pose, contact_point_indices)

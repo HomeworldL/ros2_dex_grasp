@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import pytorch3d.structures
 import pytorch3d.ops
 import trimesh as tm
-# from torchsdf import index_vertices_by_faces, compute_sdf
+from torchsdf import index_vertices_by_faces, compute_sdf
 
 
 class HandModel:
@@ -50,7 +50,7 @@ class HandModel:
         
         contact_points = json.load(open(contact_points_path, 'r')) if contact_points_path is not None else None
         penetration_points = json.load(open(penetration_points_path, 'r')) if penetration_points_path is not None else None
-
+        # print(contact_points)
         # build mesh
 
         self.mesh = {}
@@ -58,6 +58,7 @@ class HandModel:
 
         def build_mesh_recurse(body):
             if(len(body.link.visuals) > 0):
+                # print(body.link.name)
                 link_name = body.link.name
                 link_vertices = []
                 link_faces = []
@@ -71,7 +72,9 @@ class HandModel:
                     elif visual.geom_type == "capsule":
                         link_mesh = tm.primitives.Capsule(radius=visual.geom_param[0], height=visual.geom_param[1] * 2).apply_translation((0, 0, -visual.geom_param[1]))
                     elif visual.geom_type == "mesh":
-                        link_mesh = tm.load_mesh(os.path.join(mesh_path, visual.geom_param[0].split(":")[1]+".obj"), process=False)
+                        print(visual.geom_param[0])
+                        # link_mesh = tm.load_mesh(os.path.join(mesh_path, visual.geom_param[0].split(":")[1]+".obj"), process=False)
+                        link_mesh = tm.load_mesh(os.path.join(mesh_path, visual.geom_param[0]+".STL"), process=False)
                         if visual.geom_param[1] is not None:
                             scale = torch.tensor(visual.geom_param[1], dtype=torch.float, device=device)
                     vertices = torch.tensor(link_mesh.vertices, dtype=torch.float, device=device)
@@ -84,19 +87,30 @@ class HandModel:
                     n_link_vertices += len(vertices)
                 link_vertices = torch.cat(link_vertices, dim=0)
                 link_faces = torch.cat(link_faces, dim=0)
-                contact_candidates = torch.tensor(contact_points[link_name], dtype=torch.float32, device=device).reshape(-1, 3) if contact_points is not None else None
-                penetration_keypoints = torch.tensor(penetration_points[link_name], dtype=torch.float32, device=device).reshape(-1, 3) if penetration_points is not None else None
+                
+                # ljj: 这里一定需要注意，不能直接替换link_name
+                if "_child" in link_name:
+                    link_name_json = link_name.replace("_child", "")
+                else:
+                    link_name_json = link_name
+                # print(link_name)
+                contact_candidates = torch.tensor(contact_points[link_name_json], dtype=torch.float32, device=device).reshape(-1, 3) if contact_points is not None else None
+                penetration_keypoints = torch.tensor(penetration_points[link_name_json], dtype=torch.float32, device=device).reshape(-1, 3) if penetration_points is not None else None
                 self.mesh[link_name] = {
                     'vertices': link_vertices,
                     'faces': link_faces,
                     'contact_candidates': contact_candidates,
                     'penetration_keypoints': penetration_keypoints,
                 }
-                if link_name in ['robot0:palm', 'robot0:palm_child', 'robot0:lfmetacarpal_child']:
-                    link_face_verts = index_vertices_by_faces(link_vertices, link_faces)
-                    self.mesh[link_name]['face_verts'] = link_face_verts
-                else:
-                    self.mesh[link_name]['geom_param'] = body.link.visuals[0].geom_param
+                # ljj
+                # if link_name in ['robot0:palm', 'robot0:palm_child', 'robot0:lfmetacarpal_child']:
+                #     link_face_verts = index_vertices_by_faces(link_vertices, link_faces)
+                #     self.mesh[link_name]['face_verts'] = link_face_verts
+                # else:
+                #     self.mesh[link_name]['geom_param'] = body.link.visuals[0].geom_param
+                link_face_verts = index_vertices_by_faces(link_vertices, link_faces)
+                self.mesh[link_name]['face_verts'] = link_face_verts
+                # ljj
                 areas[link_name] = tm.Trimesh(link_vertices.cpu().numpy(), link_faces.cpu().numpy()).area.item()
             for children in body.children:
                 build_mesh_recurse(children)
@@ -151,6 +165,8 @@ class HandModel:
         self.n_keypoints = self.penetration_keypoints.shape[0]
 
         # parameters
+        
+        print(self.contact_candidates)
 
         self.hand_pose = None
         self.contact_point_indices = None
@@ -361,4 +377,24 @@ class HandModel:
             if pose is not None:
                 contact_points = contact_points @ pose[:3, :3].T + pose[:3, 3]
             data.append(go.Scatter3d(x=contact_points[:, 0], y=contact_points[:, 1], z=contact_points[:, 2], mode='markers', marker=dict(color='red', size=5)))
+        return data
+
+    def get_trimesh_data(self, i):
+        """
+        Get full mesh
+        
+        Returns
+        -------
+        data: trimesh.Trimesh
+        """
+        data = tm.Trimesh()
+        for link_name in self.mesh:
+            v = self.current_status[link_name].transform_points(
+                self.mesh[link_name]['vertices'])
+            if len(v.shape) == 3:
+                v = v[i]
+            v = v @ self.global_rotation[i].T + self.global_translation[i]
+            v = v.detach().cpu()
+            f = self.mesh[link_name]['faces'].detach().cpu()
+            data += tm.Trimesh(vertices=v, faces=f)
         return data

@@ -26,7 +26,7 @@
   </asset>
 
   <worldbody>
-    <body name="right_hand" pos="0.0 -0.2 0.5">  
+    <body name="right_palm" pos="0.0 0.0 0.0">  
       <!-- <freejoint/> -->
       <geom type="mesh" rgba="0.2 0.2 0.2 1" mesh="right_palm"/>
       <body name="right_f11" pos="-0.022466 0.027654 0.043657" quat="0.5065 0.493412 0.506504 0.493412">

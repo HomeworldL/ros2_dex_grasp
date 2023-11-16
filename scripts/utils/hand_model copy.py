@@ -50,7 +50,7 @@ class HandModel:
         
         contact_points = json.load(open(contact_points_path, 'r')) if contact_points_path is not None else None
         penetration_points = json.load(open(penetration_points_path, 'r')) if penetration_points_path is not None else None
-
+        # print(contact_points)
         # build mesh
 
         self.mesh = {}
@@ -58,6 +58,7 @@ class HandModel:
 
         def build_mesh_recurse(body):
             if(len(body.link.visuals) > 0):
+                # print(body.link.name)
                 link_name = body.link.name
                 link_vertices = []
                 link_faces = []
@@ -71,12 +72,15 @@ class HandModel:
                     elif visual.geom_type == "capsule":
                         link_mesh = tm.primitives.Capsule(radius=visual.geom_param[0], height=visual.geom_param[1] * 2).apply_translation((0, 0, -visual.geom_param[1]))
                     elif visual.geom_type == "mesh":
-                        link_mesh = tm.load_mesh(os.path.join(mesh_path, visual.geom_param[0].split(":")[1]+".obj"), process=False)
+                        print(visual.geom_param[0])
+                        # link_mesh = tm.load_mesh(os.path.join(mesh_path, visual.geom_param[0].split(":")[1]+".obj"), process=False)
+                        link_mesh = tm.load_mesh(os.path.join(mesh_path, visual.geom_param[0]+".STL"), process=False)
                         if visual.geom_param[1] is not None:
                             scale = torch.tensor(visual.geom_param[1], dtype=torch.float, device=device)
                     vertices = torch.tensor(link_mesh.vertices, dtype=torch.float, device=device)
                     faces = torch.tensor(link_mesh.faces, dtype=torch.long, device=device)
                     pos = visual.offset.to(self.device)
+                    print(pos)
                     vertices = vertices * scale
                     vertices = pos.transform_points(vertices)
                     link_vertices.append(vertices)
@@ -84,6 +88,10 @@ class HandModel:
                     n_link_vertices += len(vertices)
                 link_vertices = torch.cat(link_vertices, dim=0)
                 link_faces = torch.cat(link_faces, dim=0)
+                
+                if "_child" in link_name:
+                    link_name = link_name.replace("_child", "")
+                # print(link_name)
                 contact_candidates = torch.tensor(contact_points[link_name], dtype=torch.float32, device=device).reshape(-1, 3) if contact_points is not None else None
                 penetration_keypoints = torch.tensor(penetration_points[link_name], dtype=torch.float32, device=device).reshape(-1, 3) if penetration_points is not None else None
                 self.mesh[link_name] = {
@@ -95,6 +103,7 @@ class HandModel:
                 if link_name in ['robot0:palm', 'robot0:palm_child', 'robot0:lfmetacarpal_child']:
                     link_face_verts = index_vertices_by_faces(link_vertices, link_faces)
                     self.mesh[link_name]['face_verts'] = link_face_verts
+                    print('xxxxxx')
                 else:
                     self.mesh[link_name]['geom_param'] = body.link.visuals[0].geom_param
                 areas[link_name] = tm.Trimesh(link_vertices.cpu().numpy(), link_faces.cpu().numpy()).area.item()
@@ -151,6 +160,8 @@ class HandModel:
         self.n_keypoints = self.penetration_keypoints.shape[0]
 
         # parameters
+        
+        print(self.contact_candidates)
 
         self.hand_pose = None
         self.contact_point_indices = None
@@ -362,3 +373,71 @@ class HandModel:
                 contact_points = contact_points @ pose[:3, :3].T + pose[:3, 3]
             data.append(go.Scatter3d(x=contact_points[:, 0], y=contact_points[:, 1], z=contact_points[:, 2], mode='markers', marker=dict(color='red', size=5)))
         return data
+
+    def get_trimesh_data(self, i):
+        """
+        Get full mesh
+        
+        Returns
+        -------
+        data: trimesh.Trimesh
+        """
+        data = tm.Trimesh()
+        for link_name in self.mesh:
+            v = self.current_status[link_name].transform_points(
+                self.mesh[link_name]['vertices'])
+            if len(v.shape) == 3:
+                v = v[i]
+            v = v @ self.global_rotation[i].T + self.global_translation[i]
+            v = v.detach().cpu()
+            f = self.mesh[link_name]['faces'].detach().cpu()
+            data += tm.Trimesh(vertices=v, faces=f)
+        return data
+    
+    def get_plotly_data_m(self, i, opacity=0.5, color='lightblue', with_contact_points=False, pose=None):
+        """
+        Get visualization data for plotly.graph_objects
+        
+        Parameters
+        ----------
+        i: int
+            index of data
+        opacity: float
+            opacity
+        color: str
+            color of mesh
+        with_contact_points: bool
+            whether to visualize contact points
+        pose: (4, 4) matrix
+            homogeneous transformation matrix
+        
+        Returns
+        -------
+        data: list
+            list of plotly.graph_object visualization data
+        """
+        if pose is not None:
+            pose = np.array(pose, dtype=np.float32)
+        data = []
+        for link_name in self.mesh:
+            v = self.current_status[link_name].transform_points(self.mesh[link_name]['vertices'])
+            if len(v.shape) == 3:
+                v = v[i]
+            v = v @ self.global_rotation[i].T + self.global_translation[i]
+            v = v.detach().cpu()
+            f = self.mesh[link_name]['faces'].detach().cpu()
+            if pose is not None:
+                v = v @ pose[:3, :3].T + pose[:3, 3]
+            data.append(go.Mesh3d(x=v[:, 0], y=v[:, 1], z=v[:, 2], i=f[:, 0], j=f[:, 1], k=f[:, 2], color=color, opacity=opacity))
+        if with_contact_points:
+            for link_name in self.mesh:
+                contact_points = self.mesh[link_name]['contact_candidates'].detach().cpu()
+                
+            contact_points = self.contact_points[i].detach().cpu()
+            if pose is not None:
+                contact_points = contact_points @ pose[:3, :3].T + pose[:3, 3]
+            data.append(go.Scatter3d(x=contact_points[:, 0], y=contact_points[:, 1], z=contact_points[:, 2], mode='markers', marker=dict(color='red', size=5)))
+        return data
+
+
+
